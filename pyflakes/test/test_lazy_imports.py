@@ -102,3 +102,64 @@ class Test(TestCase):  # pragma: >=3.15 cover
 
         type A = Literal[int]
         ''')
+
+    def test_literal_and_annotated_values_in_deferred_annotations(self):
+        for annotation in (
+                'Literal[Foo.a, Foo.b]',
+                'Annotated[int, Foo.a]',
+                'list[Literal[Foo.a]]',
+                'Annotated[Literal[Foo.a], (Foo.b, Literal[Foo.a])]',
+                "Literal['not_a_type', Foo.a]",
+                "Annotated[int, 'not_a_type', Foo.a]",
+        ):
+            annotation = annotation.replace('Literal', 'typing.Literal')
+            annotation = annotation.replace('Annotated', 'typing.Annotated')
+            for statement in (
+                    'value: {annotation}',
+                    'class C:\n    value: {annotation}',
+                    'def f(value: {annotation}) -> {annotation}: ...',
+                    'type Alias = {annotation}',
+            ):
+                with self.subTest(annotation=annotation, statement=statement):
+                    self.flakes('import typing\n'
+                                'lazy from foo import Foo\n' +
+                                statement.format(annotation=annotation) + '\n')
+
+    def test_values_in_string_annotations_are_deferred(self):
+        self.flakes('''
+        from typing import Annotated, Literal
+        lazy from foo import Foo
+        def f(value: 'Literal[Foo.a]') -> 'Annotated[int, Foo.b]': ...
+        ''')
+
+    def test_values_in_future_annotations_are_deferred(self):
+        self.flakes('''
+        from __future__ import annotations
+        from typing import Literal
+        lazy from foo import Foo
+        def f(value: Literal[Foo.a]): ...
+        ''')
+
+    def test_values_in_runtime_typing_expressions_are_eager(self):
+        for expression in (
+                'Literal[Foo.a]',
+                'Annotated[int, Foo.a]',
+                'list[Literal[Foo.a]]',
+                'cast(Literal[Foo.a], 1)',
+                'typing.List[Foo]',
+        ):
+            expression = expression.replace('Literal', 'typing.Literal')
+            expression = expression.replace('Annotated', 'typing.Annotated')
+            expression = expression.replace('cast(', 'typing.cast(')
+            for statement in (
+                    'alias = {expression}',
+                    'alias: typing.TypeAlias = {expression}',
+                    'class C:\n    alias = {expression}',
+                    'def f(value={expression}): ...',
+                    'f = lambda value={expression}: value',
+            ):
+                with self.subTest(expression=expression, statement=statement):
+                    self.flakes('import typing\n'
+                                'lazy from foo import Foo\n' +
+                                statement.format(expression=expression) + '\n',
+                                m.EagerUseOfLazyImport)

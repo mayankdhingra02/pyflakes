@@ -727,6 +727,8 @@ class Checker:
     nodeDepth = 0
     offset = None
     _in_annotation = AnnotationState.NONE
+    # Literal values and Annotated metadata can still be evaluated lazily.
+    _in_deferred_annotation = False
 
     def __init__(self, tree, filename='(none)', builtins=None,
                  withDoctest='PYFLAKES_DOCTEST' in os.environ):
@@ -1055,10 +1057,7 @@ class Checker:
             elif (
                     isinstance(binding, Importation) and
                     binding.is_lazy and
-                    func_depth == 0 and (
-                        self._in_annotation == AnnotationState.NONE or
-                        self._in_annotation == AnnotationState.STR_AS_TYPE
-                    )
+                    func_depth == 0 and not self._in_deferred_annotation
             ):  # pragma: >=3.15 cover
                 self.report(messages.EagerUseOfLazyImport, node, name, binding.source)
 
@@ -1181,12 +1180,15 @@ class Checker:
             self.report(messages.UndefinedName, node, node.id)
 
     @contextlib.contextmanager
-    def _enter_annotation(self, ann_type=AnnotationState.BARE):
+    def _enter_annotation(self, ann_type=AnnotationState.BARE, *, deferred=False):
         orig, self._in_annotation = self._in_annotation, ann_type
+        orig_deferred = self._in_deferred_annotation
+        self._in_deferred_annotation |= deferred or ann_type == AnnotationState.STRING
         try:
             yield
         finally:
             self._in_annotation = orig
+            self._in_deferred_annotation = orig_deferred
 
     @property
     def _in_postponed_annotation(self):
@@ -1309,8 +1311,10 @@ class Checker:
         self.handleNode(parsed_annotation, node)
 
     def handle_annotation_always_deferred(self, annotation, parent):
-        fn = in_annotation(Checker.handleNode)
-        self.deferFunction(lambda: fn(self, annotation, parent))
+        def run_annotation():
+            with self._enter_annotation(deferred=True):
+                self.handleNode(annotation, parent)
+        self.deferFunction(run_annotation)
 
     @in_annotation
     def handleAnnotation(self, annotation, node):
